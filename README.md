@@ -3,7 +3,7 @@ Creating a CFR Poker Bot in Python to win some $$
 
 ## Project Details:
 The Poker Bot will be built to play No Limit Hold 'Em poker.
-It should be able to play optimally in heads-up poker (according to game theory), and pretty damn good full-table poker too.
+It should be able to play optimally in heads-up poker (according to game theory), and be pretty damn good at full-table too.
 
 ## Strategy:
 1. Create a custom poker environment (or maybe find another one on GitHub)
