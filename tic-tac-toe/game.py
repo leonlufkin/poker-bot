@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # config.register_player("Basic Player", BasicPlayer())
     config.register_player("CFR Player", CFRPlayer())
 
-    num_runs = int(1e1)
+    num_runs = int(1e3)
     game_results = np.empty(num_runs, dtype="S13")
     for run in range(num_runs):
         game_results[run] = run_game(config, verbose=False)
