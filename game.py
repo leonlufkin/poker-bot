@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from utils import rotate_list
+from collections import Counter
 
-class Hand:
+class OldHand:
     """
     class for storing information about current hand, this info is accessible to all players (information 
     they can use to make decisions)
@@ -75,6 +76,89 @@ class HandState:
         self.seat = seat
         return self
 
+class Hand:
+    def __init__(self, cards):
+        self.faces = {str(num+1): num for num in range(9)}
+        self.faces.update({'A': 0, 't': 9, 'J': 10, 'Q': 11, 'K': 12})
+        self.suits = {'H': 0, 'D': 1, 'S': 2, 'C': 3}
+
+        self.cards = cards
+        self.hand_type, self.hand, self.sorted_cards = self.get_hand(cards)
+
+    def get_card_face(self, card):
+        return self.faces[card[0]]
+
+    def get_card_suit(self, card):
+        return self.suits[card[1]]
+
+    def get_straight_high(self, faces):
+        straight_high_max = -1
+        # accounting for ace high
+        if 0 in faces:
+            faces.append(13)
+        for shift in range(13):
+            faces_shifted = [f-shift for f in faces]
+            if set([0,1,2,3,4]) <= set(faces_shifted):
+                straight_high = 4+shift
+                if straight_high > straight_high_max:
+                    straight_high_max = straight_high
+        return straight_high_max
+
+    def get_hand(self, cards):
+        faces = [self.get_card_face(card) for card in cards]
+        suits = [self.get_card_suit(card) for card in cards]
+        faces_sorted = sorted(([13] * (np.array(faces) == 0).sum()) + [face for face in faces if face != 0], reverse=True)
+        
+        faces_counts = Counter(faces)
+        suits_counts = Counter(suits)
+
+        # straight flush
+        if 5 in suits_counts.values() and (straight_high := self.get_straight_high(faces)) > 0:
+            hand = [[card for card, face in zip(cards, faces) if face == (straight_high-i)%13][0] for i in range(5)]
+            # royal flush
+            if straight_high == 13:
+                return 9, {'hand': hand}, faces_sorted
+            else:
+                return 8, {'hand': hand, 'straight high': straight_high}, faces_sorted
+        # four of a kind
+        if 4 in faces_counts.values():
+            face = [face for face, count in faces_counts.items() if count == 4][0]
+            hand = [card for card, f in zip(cards, faces) if f == face]
+            return 7, {'hand': hand, 'face': face}, faces_sorted
+        # full house
+        if set([3,2]) <= set(faces_counts.values()):
+            set_face = [face for face, count in faces_counts.items() if count == 3][0]
+            pair_face = max([face for face, count in faces_counts.items() if count == 2])
+            hand = [card for card, f in zip(cards, faces) if (f == set_face) or (f == pair_face)]
+            return 6, {'hand': hand, 'set face': 13 if set_face == 0 else set_face, 'pair face': pair_face}, faces_sorted
+        # flush
+        if 5 in suits_counts.values():
+            suit = [suit for suit, count in suits_counts.items() if count == 5][0]
+            flush_faces = [face for face, s in zip(faces, suits) if s == suit]
+            hand = [card for card, s in zip(cards, suits) if s == suit]
+            return 5, {'hand': hand, 'flush high': max(flush_faces)}, faces_sorted
+        # straight
+        if (straight_high := self.get_straight_high(faces)) > 0:
+            hand = [[card for card, face in zip(cards, faces) if face == (straight_high-i)%13][0] for i in range(5)]
+            return 4, {'hand': hand, 'straight high': straight_high}, faces_sorted
+        # three of a kind
+        if 3 in faces_counts.values():
+            face = [face for face, count in faces_counts.items() if count == 3][0]
+            hand = [card for card, f in zip(cards, faces) if f == face]
+            return 3, {'hand': hand, 'face': face}, faces_sorted
+        # two pair
+        if (np.array(list(faces_counts.values())) == 2).sum() == 2:
+            pair_faces = [face for face, count in faces_counts.items() if count == 2]
+            hand = [card for card, f in zip(cards, faces) if f in faces]
+            return 2, {'hand': hand, 'high face': max(pair_faces), 'low face': min(pair_faces)}, faces_sorted
+        # one pair
+        if 2 in faces_counts.values():
+            face = [face for face, count in faces_counts.items() if count == 2][0]
+            hand = [card for card, f in zip(cards, faces) if f == face]
+            return 1, {'hand': hand, 'face': face}, faces_sorted
+        # high card
+        return 0, None, faces_sorted
+
 
 class Dealer:
     def __init__(self, num_players):
@@ -83,19 +167,20 @@ class Dealer:
         self.community_cards = []
         self.available_cards = np.arange(52)
 
-        self.faces = {num : str(num+1) for num in range(1,8)}
+        self.faces = {num : str(num+1) for num in range(1,9)}
         self.faces.update({0: 'A', 9: 't', 10: 'J', 11: 'Q', 12: 'K'})
         self.suits = {0 : 'H', 1: 'D', 2: 'S', 3: 'C'}
 
     def display_card(self, card):
         face = card % 13
-        suit = card // 4
+        suit = card // 13
         name = self.faces[face] + self.suits[suit]
         return name
 
     def draw_cards(self, num_cards):
-        cards = np.random.choice(self.available_cards, size=num_cards)
-        self.available_cards = self.available_cards.delete(cards)
+        cards = np.random.choice(self.available_cards, size=num_cards, replace=False)
+        for card in cards:
+            self.available_cards = self.available_cards[self.available_cards != card]
         return [self.display_card(card) for card in cards]
 
     def deal_hole_cards(self):
@@ -108,41 +193,48 @@ class Dealer:
         self.community_cards += cards
         return cards
 
-    def get_hand_type(self, hand):
-        if self.is_straight_flush(hand):
-            return 8 # "straight flush"
-        if self.is_four_kind(hand):
-            return 7 # "four of a kind"
-        if self.is_full_house(hand):
-            return 6 # "full house"
-        if self.is_flush(hand):
-            return 5 # "flush"
-        if self.is_straight(hand):
-            return 4 # "straight"
-        if self.is_three_kind(hand):
-            return 3 # "three of a kind"
-        if self.is_two_pair(hand):
-            return 2 # "two pair"
-        if self.is_one_pair(hand):
-            return 1 # "one pair"
-        return 0 # "high card"
-
-    def break_tie(self)
-
-
     def determine_hand_ranks(self, active):
-        hand_types = np.zeros(self.num_players)
+        hands = []
         for player in range(self.num_players):
             if not active[player]:
                 continue
-            hand = self.hole_cards[player] + self.community_cards
-            hand_types[player] = self.get_hand_type()
-        
-        if (hand_types==best_hand).sum() > 1:
-        else:
-            
-            self.
-            
+            hands.append(Hand(self.hole_cards[player] + self.community_cards))
+        hand_types = np.array([hand.hand_type for hand in hands])
+        hand_ranks = np.array([(hand_type > hand_types).sum() for hand_type in hand_types])
+
+        for hand_type in np.unique(hand_types):
+            if (hand_type_mask := (hand_type == hand_types)).sum() > 1:
+                # straight (flush)
+                if hand_type == 8 or hand_type == 4:
+                    straight_highs = np.array([hand.hand['straight high'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    hand_ranks[hand_type_mask] += np.array([(high > straight_highs).sum() for high in straight_highs])
+                # four of a kind, three of a kind, one pair
+                elif hand_type == 7 or hand_type == 3 or hand_type == 1:
+                    faces = np.array([hand.hand['face'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    hand_ranks[hand_type_mask] += np.array([(face > faces).sum() for face in faces])
+                # full house
+                elif hand_type == 6:
+                    set_faces = np.array([hand.hand['set face'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    pair_faces = np.array([hand.hand['pair face'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    hand_ranks[hand_type_mask] += np.array([(set_face > set_faces).sum() + (pair_face > pair_faces[set_faces == set_face]).sum() for set_face, pair_face in zip(set_faces, pair_faces)])
+                # flush
+                elif hand_type == 5:
+                    flush_highs = np.array([hand.hand['flush high'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    hand_ranks[hand_type_mask] += np.array([(high > flush_highs).sum() for high in flush_highs])
+                # two pair
+                elif hand_type == 2:
+                    high_faces = np.array([hand.hand['high face'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    low_faces = np.array([hand.hand['low face'] for hand, type in zip(hands, hand_types) if type == hand_type])
+                    hand_ranks[hand_type_mask] += np.array([(high_face > high_faces).sum() + (low_face > low_faces[high_faces == high_face]).sum() for high_face, low_face in zip(high_faces, low_faces)])
+                # high card
+                else:
+                    best_five_cards = [np.array([hand.sorted_cards[card] for hand, type in zip(hands, hand_types) if type == hand_type]) for card in range(5)] # getting top 5 cards
+                    hand_numbers = np.apply_along_axis(lambda x: int('' .join(x)), 0, np.array([(cards == cards.max()).astype(int).astype(str) for cards in best_five_cards]))
+                    hand_ranks[hand_type_mask] += np.array([(hand_number > hand_numbers).sum() for hand_number in hand_numbers])
+
+        final_ranks = np.zeros(len(active))
+        final_ranks[active] = hand_ranks + 1
+        return final_ranks, hand_types
 
 
 class Table:

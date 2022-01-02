@@ -12,6 +12,10 @@ It should be able to play optimally in heads-up poker (according to game theory)
 4. Test with heads-up poker (where CFR achieves Nash equilibrium)
 5. Test with full-table poker, and modify accordingly
 
+## Immediate to-do:
+1. Verify that hand ranker is correct
+2. Make sure betting rounds are properly executed
+
 ## Resources:
 - [Brown, N. and Sandholm, T., 2017, March. Safe and nested endgame solving for imperfect-information games. In Workshops at the thirty-first AAAI conference on artificial intelligence.](https://proceedings.neurips.cc/paper/2017/file/7fe1f8abaad094e0b5cb1b01d712f708-Paper.pdf)
 - [Brown, N., Lerer, A., Gross, S. and Sandholm, T., 2019, May. Deep counterfactual regret minimization. In International conference on machine learning (pp. 793-802). PMLR.](https://arxiv.org/pdf/1811.00164.pdf)
