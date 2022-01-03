@@ -1,164 +1,5 @@
-from abc import ABC, abstractmethod
 import numpy as np
-from utils import rotate_list
-from collections import Counter
-
-class OldHand:
-    """
-    class for storing information about current hand, this info is accessible to all players (information 
-    they can use to make decisions)
-    """
-    def __init__(self, num_players, dealer_seat, little_blind, big_blind):
-        self.num_players = num_players
-        self.dealer_seat = dealer_seat
-        self.LB_seat = (dealer_seat + 1) % num_players
-        self.BB_seat = (dealer_seat + 2) % num_players
-
-        self.LB = little_blind
-        self.BB = big_blind
-
-        self.chip_counts = np.zeros(self.num_players)
-        self.active_players = np.ones(self.num_players, dtype=bool)
-        self.community_cards = []
-
-        self.bets = np.zeros(self.num_players)
-        self.bet_blinds()
-        self.pot = 0
-
-
-    def fold_player(self, player):
-        self.active_players[player] = False
-        self.num_players -= 1
-
-
-    def add_community_cards(self, cards):
-        self.community_cards += cards
-    
-
-    def bet_blinds(self):
-        self.bets[self.LB_seat] = self.LB
-        self.bets[self.BB_seat] = self.BB
-
-    def add_bet(self, player, bet):
-        self.bets[player] = bet
-
-    def reset_bets(self):
-        self.bets = np.zeros(self.num_players)
-
-    def combine_pot(self):
-        self.pot += self.bets.sum()
-        self.reset_bets()
-
-
-class Move:
-    def __init__(self, move, amount=0):
-        self.validate_move(move, amount)
-        self.move = move
-        self.amount = amount
-    
-    def validate_move(self, move, amount):
-        if move not in ["fold", "call", "check", "raise"]:
-            raise ValueError("invalid move type {}, must be one of 'fold', 'call', 'check', or 'raise'".format(move))
-        if move == "raise":
-            if amount <= 0:
-                raise ValueError("cannot raise {}, must raise a strictly positive amount".format(amount))
-
-class HandState:
-    def __init__(self, active, bets, pot, shares, betting_round):
-        self.active = active
-        self.bets = bets
-        self.pot = pot
-        self.shares = shares
-        self.betting_round = betting_round
-        self.seat = None
-
-    def add_player_seat(self, seat):
-        self.seat = seat
-        return self
-
-class Hand:
-    def __init__(self, cards):
-        self.faces = {str(num+1): num for num in range(9)}
-        self.faces.update({'A': 0, 't': 9, 'J': 10, 'Q': 11, 'K': 12})
-        self.suits = {'H': 0, 'D': 1, 'S': 2, 'C': 3}
-
-        self.cards = cards
-        self.hand_type, self.hand, self.sorted_cards = self.get_hand(cards)
-
-    def get_card_face(self, card):
-        return self.faces[card[0]]
-
-    def get_card_suit(self, card):
-        return self.suits[card[1]]
-
-    def get_straight_high(self, faces):
-        straight_high_max = -1
-        # accounting for ace high
-        if 0 in faces:
-            faces.append(13)
-        for shift in range(13):
-            faces_shifted = [f-shift for f in faces]
-            if set([0,1,2,3,4]) <= set(faces_shifted):
-                straight_high = 4+shift
-                if straight_high > straight_high_max:
-                    straight_high_max = straight_high
-        return straight_high_max
-
-    def get_hand(self, cards):
-        faces = [self.get_card_face(card) for card in cards]
-        suits = [self.get_card_suit(card) for card in cards]
-        faces_sorted = sorted(([13] * (np.array(faces) == 0).sum()) + [face for face in faces if face != 0], reverse=True)
-        
-        faces_counts = Counter(faces)
-        suits_counts = Counter(suits)
-
-        # straight flush
-        if 5 in suits_counts.values() and (straight_high := self.get_straight_high(faces)) > 0:
-            hand = [[card for card, face in zip(cards, faces) if face == (straight_high-i)%13][0] for i in range(5)]
-            # royal flush
-            if straight_high == 13:
-                return 9, {'hand': hand}, faces_sorted
-            else:
-                return 8, {'hand': hand, 'straight high': straight_high}, faces_sorted
-        # four of a kind
-        if 4 in faces_counts.values():
-            face = [face for face, count in faces_counts.items() if count == 4][0]
-            hand = [card for card, f in zip(cards, faces) if f == face]
-            return 7, {'hand': hand, 'face': face}, faces_sorted
-        # full house
-        if set([3,2]) <= set(faces_counts.values()):
-            set_face = [face for face, count in faces_counts.items() if count == 3][0]
-            pair_face = max([face for face, count in faces_counts.items() if count == 2])
-            hand = [card for card, f in zip(cards, faces) if (f == set_face) or (f == pair_face)]
-            return 6, {'hand': hand, 'set face': 13 if set_face == 0 else set_face, 'pair face': pair_face}, faces_sorted
-        # flush
-        if 5 in suits_counts.values():
-            suit = [suit for suit, count in suits_counts.items() if count == 5][0]
-            flush_faces = [face for face, s in zip(faces, suits) if s == suit]
-            hand = [card for card, s in zip(cards, suits) if s == suit]
-            return 5, {'hand': hand, 'flush high': max(flush_faces)}, faces_sorted
-        # straight
-        if (straight_high := self.get_straight_high(faces)) > 0:
-            hand = [[card for card, face in zip(cards, faces) if face == (straight_high-i)%13][0] for i in range(5)]
-            return 4, {'hand': hand, 'straight high': straight_high}, faces_sorted
-        # three of a kind
-        if 3 in faces_counts.values():
-            face = [face for face, count in faces_counts.items() if count == 3][0]
-            hand = [card for card, f in zip(cards, faces) if f == face]
-            return 3, {'hand': hand, 'face': face}, faces_sorted
-        # two pair
-        if (np.array(list(faces_counts.values())) == 2).sum() == 2:
-            pair_faces = [face for face, count in faces_counts.items() if count == 2]
-            hand = [card for card, f in zip(cards, faces) if f in faces]
-            return 2, {'hand': hand, 'high face': max(pair_faces), 'low face': min(pair_faces)}, faces_sorted
-        # one pair
-        if 2 in faces_counts.values():
-            face = [face for face, count in faces_counts.items() if count == 2][0]
-            hand = [card for card, f in zip(cards, faces) if f == face]
-            return 1, {'hand': hand, 'face': face}, faces_sorted
-        # high card
-        return 0, None, faces_sorted
-
+from utils import rotate_list, Hand, HandState
 
 class Dealer:
     def __init__(self, num_players):
@@ -193,10 +34,15 @@ class Dealer:
         self.community_cards += cards
         return cards
 
-    def determine_hand_ranks(self, active):
+    def get_high_card(self, best_cards: np.ndarray):
+        hand_numbers = np.apply_along_axis(lambda x: int('' .join(x)), 1, np.apply_along_axis(lambda x: x == max(x), 0, best_cards).astype(int).astype(str))
+        hand_rank = np.array([(hand_number > hand_numbers).sum() for hand_number in hand_numbers])
+        return hand_rank
+
+    def determine_hand_ranks(self, playing):
         hands = []
         for player in range(self.num_players):
-            if not active[player]:
+            if not playing[player]:
                 continue
             hands.append(Hand(self.hole_cards[player] + self.community_cards))
         hand_types = np.array([hand.hand_type for hand in hands])
@@ -210,8 +56,12 @@ class Dealer:
                     hand_ranks[hand_type_mask] += np.array([(high > straight_highs).sum() for high in straight_highs])
                 # four of a kind, three of a kind, one pair
                 elif hand_type == 7 or hand_type == 3 or hand_type == 1:
-                    faces = np.array([hand.hand['face'] for hand, type in zip(hands, hand_types) if type == hand_type])
-                    hand_ranks[hand_type_mask] += np.array([(face > faces).sum() for face in faces])
+                    hands_kind = [hand for hand, type in zip(hands, hand_types) if type == hand_type]
+                    faces = np.array([hand.hand['face'] for hand in hands_kind])
+                    num_kickers = 1 if hand_type == 7 else 2 if hand_type == 3 else 3
+                    kickers = np.array([np.array([card for card in hand.sorted_cards if card != face])[:num_kickers] for hand, face in zip(hands_kind, faces)])
+                    kicker_ranks = self.get_high_card(kickers)
+                    hand_ranks[hand_type_mask] += np.array([(face > faces).sum() + (kicker_rank > kicker_ranks[faces == face]).sum() for face, kicker_rank in zip(faces, kicker_ranks)])
                 # full house
                 elif hand_type == 6:
                     set_faces = np.array([hand.hand['set face'] for hand, type in zip(hands, hand_types) if type == hand_type])
@@ -223,18 +73,21 @@ class Dealer:
                     hand_ranks[hand_type_mask] += np.array([(high > flush_highs).sum() for high in flush_highs])
                 # two pair
                 elif hand_type == 2:
-                    high_faces = np.array([hand.hand['high face'] for hand, type in zip(hands, hand_types) if type == hand_type])
-                    low_faces = np.array([hand.hand['low face'] for hand, type in zip(hands, hand_types) if type == hand_type])
-                    hand_ranks[hand_type_mask] += np.array([(high_face > high_faces).sum() + (low_face > low_faces[high_faces == high_face]).sum() for high_face, low_face in zip(high_faces, low_faces)])
+                    hands_kind = [hand for hand, type in zip(hands, hand_types) if type == hand_type]
+                    high_faces = np.array([hand.hand['high face'] for hand in hands_kind])
+                    low_faces = np.array([hand.hand['low face'] for hand in hands_kind])
+                    kickers = np.array([np.array([card for card in hand.sorted_cards if card not in (high_face, low_face)]) for hand, high_face, low_face in zip(hands_kind, high_faces, low_faces)])
+                    kicker_ranks = self.get_high_card(kickers[:, :1])
+                    hand_ranks[hand_type_mask] += np.array([(high_face > high_faces).sum() + (low_face > low_faces[high_faces == high_face]).sum() + (kicker_rank > kicker_ranks[(high_faces == high_face) & (low_faces == low_face)]).sum() for high_face, low_face, kicker_rank in zip(high_faces, low_faces, kicker_ranks)])
                 # high card
                 else:
-                    best_five_cards = [np.array([hand.sorted_cards[card] for hand, type in zip(hands, hand_types) if type == hand_type]) for card in range(5)] # getting top 5 cards
-                    hand_numbers = np.apply_along_axis(lambda x: int('' .join(x)), 0, np.array([(cards == cards.max()).astype(int).astype(str) for cards in best_five_cards]))
-                    hand_ranks[hand_type_mask] += np.array([(hand_number > hand_numbers).sum() for hand_number in hand_numbers])
+                    best_five_cards = np.array([np.array([hand.sorted_cards[card] for hand, type in zip(hands, hand_types) if type == hand_type]) for card in range(5)]).T # getting top 5 cards
+                    high_card_ranks = self.get_high_card(best_five_cards)
+                    hand_ranks[hand_type_mask] += high_card_ranks
 
-        final_ranks = np.zeros(len(active))
-        final_ranks[active] = hand_ranks + 1
-        return final_ranks, hand_types
+        final_ranks = np.zeros(len(playing))
+        final_ranks[playing] = hand_ranks + 1
+        return final_ranks
 
 
 class Table:
@@ -250,7 +103,7 @@ class Table:
             raise ValueError("player with name {} already exists, please pick a new name".format(name))
         self.names.append(name)
         self.__players.append(algo)
-        self.chip_stacks = self.chip_stacks.append(0)
+        self.chip_stacks = np.append(self.chip_stacks, algo.get_chip_stack())
         self.num_players += 1
 
     def remove_player(self, name):
@@ -274,68 +127,69 @@ class Table:
         self.bets = np.zeros(self.num_players)
 
     def init_hand(self):
+        """
+        shares - number of chips player has contributed to pot
+        playing - array of True if player is still playing in current hand and False otherwise 
+        active - array of True if player is still active (playing and not all in) in current hand and False otherwise
+        pot - current pot
+        """
         self.shares = np.zeros(self.num_players)
-        self.active = np.ones(self.num_players, dtype=bool)
+        self.playing = self.chip_stacks > 0
+        self.active = self.chip_stacks > 0
         self.reset_bets()
         self.pot = 0
 
-    def play_hand(self, LB, BB):
-        # init
-        dealer = Dealer(self.num_players)
-        self.init_hand()
-        community_cards = []
-
-        # deal hole cards
-        hole_cards = dealer.deal_hole_cards()
-        self.issue_hole_cards(hole_cards)
-        self.bet_blinds(LB, BB)
-        self.round_of_betting(start=2)
-
-        # flop
-        community_cards += dealer.deal_community_cards(3)
-        self.share_community_cards(community_cards)
-        self.round_of_betting()
-
-        # turn card
-        community_cards += dealer.deal_community_cards(1)
-        self.round_of_betting()
-
-        # river card
-        dealer.deal_community_cards(1)
-        self.round_of_betting()
-
-        # showdown + distribute pot
-        self.showdown()
-        
-        # setup for next game
-        self.move_blinds()
-
     def bet_blinds(self, LB, BB):
-        self.__players[0].update_stack(-LB)
-        self.bets[0] = LB
-        self.__players[1].update_stack(-BB)
-        self.bets[1] = BB
-        self.pot = LB + BB
+        # little blind
+        if LB < self.chip_stacks[0]:
+            self.__players[0].update_stack(-LB)
+            self.bets[0] = LB
+            self.chip_stacks[0] -= LB
+        else:
+            self.__players[0].update_stack(-self.chip_stacks[0])
+            self.bets[0] = self.chip_stacks[0]
+            self.shares[0] = self.chip_stacks[0]
+            self.chip_stacks[0] = 0
+            self.active[0] = False
+            print("{} is little blind and is forced all in!".format(self.names[0]))
+        # big blind
+        if BB < self.chip_stacks[1]:
+            self.__players[1].update_stack(-BB)
+            self.bets[1] = BB
+            self.chip_stacks[1] -= BB
+        else:
+            self.__players[1].update_stack(-self.chip_stacks[1])
+            self.bets[1] = self.chip_stacks[1]
+            self.shares[1] = self.chip_stacks[1]
+            self.chip_stacks[1] = 0
+            self.active[1] = False
+            print("{} is big blind and is forced all in!".format(self.names[1]))
 
     def update_stack(self, player, amount):
-        self.chip_stacks += amount
+        self.chip_stacks[player] += amount
         self.__players[player].update_stack(amount)
 
     def get_hand_state(self, betting_round):
         hand_state = HandState(self.active, self.bets, self.pot, self.shares, betting_round)
         return hand_state
 
-    def round_of_betting(self, start=0):
+    def round_of_betting(self, start=0, verbose=False):
         if self.active.sum() < 2:
             pass
 
         max_bet = -1
+        last_raiser = (start-1) % self.num_players
         betting_round = 0
+        round_shares = np.zeros(self.num_players)
 
         while not (self.bets[self.active] == max_bet).all():
             for i in range(self.num_players):
-                if not self.active[i]:
+                seat = (i+start) % self.num_players
+
+                if not self.active[seat]:
                     continue
+                if seat == last_raiser and betting_round > 0:
+                    break
 
                 # updating each player on current state of hand
                 hand_state = self.get_hand_state(betting_round)
@@ -343,61 +197,193 @@ class Table:
                     self.__players[j].update_hand_state(hand_state.add_player_seat((j+start) % self.num_players))
 
                 # proceeding with betting
-                seat = (i+start) % self.num_players
-                move = self.__players[seat].make_move(seat, self.active, self.bets, self.pot, self.shares, betting_round)
+                move = self.__players[seat].make_move(seat, self.playing, self.bets, self.pot, self.shares, betting_round)
                 max_bet = self.bets.max()
 
+                if verbose:
+                    print("\nseat: {:d}, pot: {:.2f}, highest bet: {:.2f}, last raiser: {:d}, betting round: {:d}, num active: {:d}".format(seat, self.pot + self.bets.sum(), max_bet, last_raiser, betting_round, self.active.sum()))
+                    with np.printoptions(precision=3, suppress=True):
+                        print("bets: ", end='')
+                        print(self.bets)
+                        print("shares: ", end='')
+                        print(self.shares + self.bets)
+                        print("chip stacks: ", end='')
+                        print(self.chip_stacks)
+                    self.show_stacks_according_to_players()
+
                 if move.move == "fold":
-                    self.active[i] = False
-                    self.shares[i] = 0
+                    if verbose:
+                        print("{} (seat {}) folds!".format(self.names[seat], seat))
+                    self.playing[seat] = self.active[seat] = False
+                    round_shares[seat] = 0
                 elif move.move == "call":
-                    call_amount = max_bet-self.bets[i]
-                    if call_amount >= self.chip_stacks[i]:
-                        print("Player {} is all in!".format(self.names[i]))
-                        self.shares[i] = self.bets[i] = self.chip_stacks[i] + self.bets[i]
-                        self.update_stack(i, -self.chip_stacks[i])
-                        self.active[i] = False
+                    call_amount = max_bet-self.bets[seat]
+                    if call_amount >= self.chip_stacks[seat]:
+                        if verbose:
+                            print("{} calls and is all in!".format(self.names[seat]))
+                        round_shares[seat] = self.bets[seat] = self.chip_stacks[seat] + self.bets[seat]
+                        self.update_stack(seat, -self.chip_stacks[seat])
+                        self.active[seat] = False
                     else:
-                        self.shares[i] = max_bet
-                        self.update_stack(i, -call_amount)
-                        self.bets[i] = max_bet
+                        if verbose:
+                            print("{} (seat {}) calls!".format(self.names[seat], seat))
+                        # round_shares = max_bet
+                        self.update_stack(seat, -call_amount)
+                        self.bets[seat] = max_bet
                 elif move.move == "check":
-                    if self.bets[i] < max_bet:
-                        raise ValueError("Player {} attempted to check when they needed to bet {} more to match {}".format(self.names[i], max_bet-self.bets[i], max_bet))
+                    if self.bets[seat] < max_bet:
+                        raise ValueError("{} attempted to check when they needed to bet {} more to match {}".format(self.names[seat], max_bet-self.bets[seat], max_bet))
+                    if verbose:
+                        print("{} (seat {}) checks!".format(self.names[seat], seat))
                 else:
-                    if move.amount > self.chip_stacks[i]:
-                        raise ValueError("Player {} attempted to bet {} when they only have {}!".format(self.names[i], move.amount, self.chip_stacks[i]))
-                    elif move.amount + self.bets[i] <= max_bet:
-                        raise ValueError("Player {} attempted to raise {} when they must raise at least {} to not call, check, or fold".format(self.names[i], move.amount, max_bet-self.bets[i]+1))
+                    if move.amount > self.chip_stacks[seat]:
+                        raise ValueError("{} attempted to bet {} when they only have {}!".format(self.names[seat], move.amount, self.chip_stacks[i]))
+                    elif move.amount + self.bets[seat] <= max_bet:
+                        raise ValueError("{} attempted to raise {} when they must raise at least {} to not call, check, or fold".format(self.names[seat], move.amount, max_bet-self.bets[seat]+1))
                     elif move.amount == self.chip_stacks[i]:
-                        print("Player {} is all in!".format(self.names[i]))
-                        self.shares[i] = self.bets[i] = self.chip_stacks[i] + self.bets[i]
-                        self.update_stack(i, -self.chip_stacks[i])
-                        self.active[i] = False
+                        if verbose:
+                            print("{} is all in!".format(self.names[seat]))
+                        # round_shares[i] = self.bets[i] = self.chip_stacks[i] + self.bets[i]
+                        self.update_stack(seat, -self.chip_stacks[seat])
+                        self.active[seat] = False
+                        last_raiser = seat
                     else:
-                        self.update_stack(i, -move.amount)
-                        self.bets[i] += move.amount
-                        self.shares[i] = self.bets[i]
+                        if verbose:
+                            print("{} (seat {}) raises by {}!".format(self.names[seat], seat, move.amount))
+                        self.update_stack(seat, -move.amount)
+                        self.bets[seat] += move.amount
+                        # round_shares += self.bets[i]
+                        last_raiser = seat
             betting_round += 1
             max_bet = self.bets.max()
+        # self.shares = (self.shares + round_shares) * self.active
+        self.shares += self.bets
         self.pot += self.bets.sum()
         self.reset_bets()
 
-    def showdown(self):
-        # one player left, gets whole pot
-        if self.active.sum() == 1:
-            self.update_stack(np.where(self.active)[0][0], self.pot)
+    def showdown(self, hand_ranks, verbose=False):
+        winning_hands = hand_ranks == hand_ranks.max()
+        share_orders = np.argsort(self.shares[winning_hands])
+        share_bits = np.diff(self.shares[winning_hands], prepend=0)
+        num_winners = winning_hands.sum()
+        payouts = np.zeros(num_winners)
+        shares_left = self.shares.copy()
 
-        
+        if verbose:
+            print("winning hands:", end=' ')
+            print(winning_hands)
+            with np.printoptions(precision=3, suppress=True):
+                print("shares:", end=' ')
+                print(self.shares)
+                print("share orders:", end=' ')
+                print(share_orders)
 
-        
+        for share_bit, num_payed in zip(share_bits, np.arange(num_winners)):
+            shares_diff = shares_left-share_bit
+            payouts[share_orders[:(num_winners-num_payed)]] += (self.num_players*share_bit + (shares_diff*(shares_diff < 0)).sum()) / (num_winners-num_payed)
+            shares_left = shares_diff * (shares_diff > 0)
+            if verbose:
+                print("share bit: {:.2f}".format(share_bit))
+                with np.printoptions(precision=3, suppress=True):
+                    print("shares left: ", end='')
+                    print(shares_left)
 
+        if verbose:
+            with np.printoptions(precision=3, suppress=True):
+                print("payouts: ", end='')
+                print(payouts)
+                print("chip stacks before: ", end='')
+                print(self.chip_stacks)
+            print("pot: {:.2f}".format(self.pot))
 
+        if payouts.sum() != self.pot:
+            raise RuntimeError("total payouts ({:.2f}) are not equal to pot ({:.2f})!".format(payouts.sum(), self.pot))
+
+        # updating chip stacks
+        self.chip_stacks[winning_hands] += payouts
+        for player, payout in zip([player for player, winning_hand in zip(self.__players, winning_hands) if winning_hand], payouts):
+            player.update_stack(payout)
+        if verbose:
+            with np.printoptions(precision=3, suppress=True):
+                print("chip stacks after: ", end='')
+                print(self.chip_stacks)
+
+    def show_hands(self, hole_cards, community_cards):
+        print("\nPlayers' hands:", end='')
+        for name, cards in zip(self.names, hole_cards):
+            print("\n{}:".format(name), end=' ')
+            for card in cards:
+                print(card, end=' ')
+        print("\nCommunity cards:", end=' ')
+        for card in community_cards:
+            print(card, end=' ')
+        print("\n")
+
+    def show_stacks_according_to_players(self):
+        chip_stacks = []
+        for player in self.__players:
+            chip_stacks.append(player.get_chip_stack())
+        with np.printoptions(precision=3, suppress=True):
+            print("chip stacks according to players: ", end='')
+            print(np.array(chip_stacks))
 
     def move_blinds(self):
-        self.__players = rotate_list(self.__players)
-        self.names = rotate_list(self.names)
+        self.__players = rotate_list(self.__players, 1)
+        self.chip_stacks = np.array(rotate_list(self.chip_stacks.tolist(), 1))
+        self.names = rotate_list(self.names, 1)
 
+    def play_hand(self, LB, BB, verbose=False):
+        if verbose:
+            print("\n\n--- new hand ---")
+
+        # init
+        dealer = Dealer(self.num_players)
+        self.init_hand()
+        community_cards = []
+
+        if verbose:
+            print("\n\npre-flop")
+
+        # deal hole cards
+        hole_cards = dealer.deal_hole_cards()
+        self.issue_hole_cards(hole_cards)
+        self.bet_blinds(LB, BB)
+        self.round_of_betting(start=2, verbose=verbose)
+
+        # flop
+        if verbose:
+            print("\n\nflop")
+
+        community_cards += dealer.deal_community_cards(3)
+        self.share_community_cards(community_cards)
+        self.round_of_betting(verbose=verbose)
+
+        # turn card
+        if verbose:
+            print("\n\nturn")
+
+        community_cards += dealer.deal_community_cards(1)
+        self.round_of_betting(verbose=verbose)
+
+        # river card
+        if verbose:
+            print("\n\nriver")
+
+        community_cards += dealer.deal_community_cards(1)
+        self.round_of_betting(verbose=verbose)
+
+        if verbose:
+            self.show_hands(hole_cards, community_cards)
+
+        # showdown + distribute pot
+        hand_ranks = dealer.determine_hand_ranks(self.playing)
+        self.showdown(hand_ranks, verbose=verbose)
+
+        if verbose:
+            self.show_stacks_according_to_players()
+        
+        # setup for next game
+        self.move_blinds()
 
 class Poker:
     def __init__(self, table: Table, little_blind, big_blind) -> None:
@@ -424,12 +410,3 @@ class Poker:
     def update_blinds(self, little_blind, big_blind):
         self.little_blind = little_blind
         self.big_blind = big_blind
-
-class Player(ABC):
-    def __init__(self, number_chips):
-        self.chip_count = number_chips
-
-    @abstractmethod
-    def move(self, game_state):
-        """given game_state, returns a move: fold, call, or raise"""
-        pass
