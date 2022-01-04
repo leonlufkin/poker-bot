@@ -1,5 +1,8 @@
 import numpy as np
-from utils import rotate_list, Hand, HandState
+from os import listdir
+import sys
+from utils import rotate_list, smart_open, Hand, HandState, parse_argv
+from player import Caller, SmallRaiser
 
 class Dealer:
     def __init__(self, num_players):
@@ -148,7 +151,7 @@ class Table:
         else:
             self.__players[0].update_stack(-self.chip_stacks[0])
             self.bets[0] = self.chip_stacks[0]
-            self.shares[0] = self.chip_stacks[0]
+            # self.shares[0] = self.chip_stacks[0]
             self.chip_stacks[0] = 0
             self.active[0] = False
             print("{} is little blind and is forced all in!".format(self.names[0]))
@@ -160,7 +163,7 @@ class Table:
         else:
             self.__players[1].update_stack(-self.chip_stacks[1])
             self.bets[1] = self.chip_stacks[1]
-            self.shares[1] = self.chip_stacks[1]
+            # self.shares[1] = self.chip_stacks[1]
             self.chip_stacks[1] = 0
             self.active[1] = False
             print("{} is big blind and is forced all in!".format(self.names[1]))
@@ -189,6 +192,8 @@ class Table:
                 if not self.active[seat]:
                     continue
                 if seat == last_raiser and betting_round > 0:
+                    break
+                if self.active.sum() <= 1:
                     break
 
                 # updating each player on current state of hand
@@ -256,6 +261,8 @@ class Table:
                         last_raiser = seat
             betting_round += 1
             max_bet = self.bets.max()
+            if self.active.sum() <= 1:
+                    break
         # self.shares = (self.shares + round_shares) * self.active
         self.shares += self.bets
         self.pot += self.bets.sum()
@@ -269,24 +276,32 @@ class Table:
         payouts = np.zeros(num_winners)
         shares_left = self.shares.copy()
 
-        if verbose:
-            print("winning hands:", end=' ')
-            print(winning_hands)
-            with np.printoptions(precision=3, suppress=True):
-                print("shares:", end=' ')
-                print(self.shares)
-                print("share orders:", end=' ')
-                print(share_orders)
-
-        for share_bit, num_payed in zip(share_bits, np.arange(num_winners)):
-            shares_diff = shares_left-share_bit
-            payouts[share_orders[:(num_winners-num_payed)]] += (self.num_players*share_bit + (shares_diff*(shares_diff < 0)).sum()) / (num_winners-num_payed)
-            shares_left = shares_diff * (shares_diff > 0)
+        while shares_left.sum() > 0:
             if verbose:
-                print("share bit: {:.2f}".format(share_bit))
+                print("winning hands:", end=' ')
+                print(winning_hands)
                 with np.printoptions(precision=3, suppress=True):
-                    print("shares left: ", end='')
-                    print(shares_left)
+                    print("shares:", end=' ')
+                    print(self.shares)
+                    print("share orders:", end=' ')
+                    print(share_orders)
+
+            for share_bit, num_payed in zip(share_bits, np.arange(num_winners)):
+                shares_diff = shares_left-share_bit
+                payouts[share_orders[:(num_winners-num_payed)]] += (self.num_players*share_bit + (shares_diff*(shares_diff < 0)).sum()) / (num_winners-num_payed)
+                shares_left = shares_diff * (shares_diff > 0)
+                if verbose:
+                    print("share bit: {:.2f}".format(share_bit))
+                    with np.printoptions(precision=3, suppress=True):
+                        print("shares left: ", end='')
+                        print(shares_left)
+
+            if shares_left.sum() > 0:
+                shares_left[winning_hands] = 0
+                hand_ranks[winning_hands] = -1
+                winning_hands = hand_ranks == hand_ranks.max()
+                num_winners = winning_hands.sum()
+                share_bits = np.diff(shares_left[winning_hands], prepend=0)
 
         if verbose:
             with np.printoptions(precision=3, suppress=True):
@@ -296,8 +311,9 @@ class Table:
                 print(self.chip_stacks)
             print("pot: {:.2f}".format(self.pot))
 
-        if payouts.sum() != self.pot:
-            raise RuntimeError("total payouts ({:.2f}) are not equal to pot ({:.2f})!".format(payouts.sum(), self.pot))
+        if np.round(payouts.sum(), 2) != np.round(self.pot, 2):
+            self.show_stacks_according_to_players()
+            raise RuntimeError("total payouts ({:.8f}) are not equal to pot ({:.8f})!".format(payouts.sum(), self.pot))
 
         # updating chip stacks
         self.chip_stacks[winning_hands] += payouts
@@ -393,8 +409,6 @@ class Poker:
         self.big_blind = big_blind
         self.chip_counts = np.zeros(self.num_players)
 
-    
-
     def validate_move(self, move, player):
         player_stack = self.chip_counts[player]
 
@@ -410,3 +424,44 @@ class Poker:
     def update_blinds(self, little_blind, big_blind):
         self.little_blind = little_blind
         self.big_blind = big_blind
+
+
+if __name__  == '__main__':
+    args = parse_argv()
+    player_files = [file for file in listdir(args.fpath) if file.startswith("player_")]
+    names = [file.removeprefix("player_").removesuffix(".py") for file in player_files]
+    stdout = sys.stdout
+    if args.outfile is not None:
+        sys.stdout = open(args.outfile, 'w')
+
+    # registering players at table
+    table = Table()
+    table.register_player("Caller 1", Caller(args.buy_in))
+    table.register_player("Caller 2", Caller(args.buy_in))
+    table.register_player("Small Raiser 1", SmallRaiser(args.buy_in))
+    table.register_player("Small Raiser 2", SmallRaiser(args.buy_in))
+    table.register_player("Small Raiser 3", SmallRaiser(args.buy_in))
+    table.register_player("Caller 3", Caller(args.buy_in))
+
+    # playing hands
+    for hand in range(args.hands):
+        if hand % int(args.hands/10) == 0:
+            print("Played {} hands!".format(hand), file=stdout)
+        table.play_hand(args.little_blind, args.big_blind, verbose=args.verbose)
+
+        if (table.chip_stacks == 0).any():
+            for name, chip_stack in zip(table.names, table.chip_stacks):
+                if chip_stack == 0:
+                    table.remove_player(name)
+                    print("{} kicked out!".format(name), file=stdout)
+
+        if table.num_players == 1:
+            break
+    
+    # displaying final results
+    print("\nFinal chip stacks:", file=stdout)
+    for name, stack in zip(table.names, table.chip_stacks):
+        print("{}: {:.2f}".format(name, stack), file=stdout)
+
+    if args.outfile is not None:
+        sys.stdout.close()

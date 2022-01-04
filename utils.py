@@ -1,6 +1,7 @@
 import numpy as np
 from collections import Counter
 
+
 def rotate_list(l, n):
     return l[-n:] + l[:-n]
 
@@ -113,3 +114,51 @@ class HandState:
     def add_player_seat(self, seat):
         self.seat = seat
         return self
+
+import argparse
+def parse_argv():
+    parser = argparse.ArgumentParser(prog = 'nwave')
+
+    players = parser.add_argument_group("players")
+    game_config = parser.add_argument_group("game")
+    debug = parser.add_argument_group("debug")
+
+    players.add_argument("--fpath", type=str, nargs='?', default='.')
+
+    game_config.add_argument("--buy_in", type=int, nargs='?', default=200)
+    game_config.add_argument("--little_blind", type=int, nargs='?', default=1)
+    game_config.add_argument("--big_blind", type=int, nargs='?', default=2)
+    game_config.add_argument("--hands", type=int, nargs='?', default=100)
+
+    debug.add_argument("--verbose", action="store_true")
+    debug.add_argument("--outfile", type=str, default=None)
+
+    args = parser.parse_args()
+    return args
+
+import sys
+def load_player_from_path(dir, name, buy_in):
+    """
+    from https://appdividend.com/2021/03/31/how-to-import-class-from-another-file-in-python/
+    """
+    sys.path.append(dir)
+    exec("from {} import MyPlayer".format(name.removesuffix(".py")))
+    return MyPlayer(buy_in)
+
+
+import contextlib
+@contextlib.contextmanager
+def smart_open(filename=None):
+    """
+    from https://stackoverflow.com/questions/17602878/how-to-handle-both-with-open-and-sys-stdout-nicely
+    """
+    if filename and filename != '-':
+        fh = open(filename, 'w')
+    else:
+        fh = sys.stdout
+
+    try:
+        yield fh
+    finally:
+        if fh is not sys.stdout:
+            fh.close()
