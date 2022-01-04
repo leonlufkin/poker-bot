@@ -13,8 +13,8 @@ It should be able to play optimally in heads-up poker (according to game theory)
 5. Test with full-table poker, and modify accordingly
 
 ## Immediate to-do:
-1. Verify that hand ranker is correct
-2. Make sure betting rounds are properly executed
+1. Build game tree/subgame class
+2. Test with heavily abstracted games
 
 ## Resources:
 - [Brown, N. and Sandholm, T., 2017, March. Safe and nested endgame solving for imperfect-information games. In Workshops at the thirty-first AAAI conference on artificial intelligence.](https://proceedings.neurips.cc/paper/2017/file/7fe1f8abaad094e0b5cb1b01d712f708-Paper.pdf)
