@@ -5,6 +5,12 @@ Creating a CFR Poker Bot in Python to win some $$
 The Poker Bot will be built to play No Limit Texas Hold 'Em poker.
 It should be able to play optimally in heads-up poker (according to game theory), and be pretty damn good at full-table too.
 
+## Usage:
+1. Clone repo
+2. Create a bot based on the Player class in player.py
+3. Import bot and register at table using register_player method (see game.py for an example)
+4. Run game.py using python3 game.py --hands 1000 --outfile "out.txt" (see utils for other arguments that can be specified)
+
 ## Strategy:
 1. Create a custom poker environment (or maybe find another one on GitHub)
 2. Learn about counterfactual regret minimization (CFR)
