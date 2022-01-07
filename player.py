@@ -9,6 +9,8 @@ class Player(ABC):
         self.community_cards = []
         self.wins = 0
         self.hands = 0
+        self.hand_state = None
+        self.prev_hand_state = None
 
     def update_stack(self, amount):
         if -amount > self.chip_stack:
@@ -24,9 +26,45 @@ class Player(ABC):
     def get_community_cards(self, community_cards):
         self.community_cards = community_cards
 
-    @abstractmethod
+    def infer_move(self) -> Move:
+        """
+        I think this function is useless now that I changed HandState but I'll leave it for now
+        """
+        hand_state = self.hand_state
+        actor = hand_state.actor
+        # first move
+        if self.prev_hand_state is None:
+            calling_bet = np.array([bet for player, bet in hand_state.bets.items() if player != actor]).max()
+            # actor folded
+            if (1 - np.array(list(hand_state.playing.values()), dtype=int)).sum() > 0:
+                return actor, Move("fold")
+            # actor called
+            if hand_state.bets[actor] == calling_bet:
+                return actor, Move("call")
+            # actor raised
+            return actor, Move("raise", hand_state.bets[actor])
+        
+        # not first move
+        prev_hand_state = self.prev_hand_state
+        calling_bet = np.array(list(prev_hand_state.bets.values())).max()
+
+        # actor folded
+        playing = np.array(list(hand_state.playing.values())) - np.array(list(prev_hand_state.playing.values()))
+        if (playing < 0).sum() > 0:
+            return actor, Move("fold")
+        # actor checked
+        if prev_hand_state.bets[actor] == hand_state.bets[actor] == calling_bet:
+            return actor, Move("check")
+        # actor called
+        if hand_state.bets[actor] == calling_bet:
+            return actor, Move("call")
+        # actor raised
+        return actor, Move("raise", hand_state.bets[actor])
+
     def update_hand_state(self, hand_state: HandState) -> None:
-        pass
+        if self.prev_hand_state is not None:
+            self.prev_hand_state = self.hand_state
+            self.hand_state = hand_state
 
     @abstractmethod
     def make_move(self) -> Move:
@@ -164,17 +202,15 @@ from CFR import Node, CFR_Tree
 class CFR(Player):
     def __init__(self, chip_stack, CFR_tree: CFR_Tree) -> None:
         super().__init__(chip_stack)
-        self.node = Node()
+        self.CFR_tree = CFR_tree
         
     def get_hole_cards(self, hole_cards):
         super().get_hole_cards(hole_cards)
-        self.game_tree[abstract_hand_key('-'.join(hole_cards))]
-
-    def traverse_game_tree(self, player, action):
-        self.node = self.node.traverse_game_tree(player, action)
+        self.node = self.CFR_tree.head.choose_child(hole_cards)
 
     def update_hand_state(self, hand_state: HandState) -> None:
-        pass
+        super().update_hand_state(hand_state)
+        self.node.choose_child(hand_state.move) 
 
     def make_move(self):
         # pre-flop

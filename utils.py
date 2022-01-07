@@ -6,10 +6,11 @@ def rotate_list(l, n):
     return l[-n:] + l[:-n]
 
 class Move:
-    def __init__(self, move, amount=0):
+    def __init__(self, move, amount=0, actor=None):
         self.validate_move(move, amount)
         self.move = move
         self.amount = amount
+        self.actor = actor
     
     def validate_move(self, move, amount):
         if move not in ["fold", "call", "check", "raise"]:
@@ -116,7 +117,7 @@ def abstract_hand_key(hand_key: str):
 
 from copy import deepcopy
 class HandState:
-    def __init__(self, names, playing, active, bets, pot, shares, betting_round):
+    def __init__(self, names, actor, playing, active, bets, pot, shares, betting_round, move: Move):
         self.playing = {name: is_playing for name, is_playing in zip(names, playing)}
         self.active = {name: is_active for name, is_active in zip(names, active)}
         self.bets = {name: bet for name, bet in zip(names, bets)}
@@ -124,6 +125,9 @@ class HandState:
         self.shares = {name: share for name, share in zip(names, shares)}
         self.betting_round = betting_round
         self.seat = None
+        self.actor = actor
+        self.move = move
+        self.move.actor = actor
 
     def add_player_info(self, name, seat) -> None:
         c = deepcopy(self)

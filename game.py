@@ -185,12 +185,12 @@ class Table:
         self.chip_stacks[player] += amount
         self.__players[player].update_stack(amount)
 
-    def get_hand_state(self, betting_round):
-        hand_state = HandState(self.names, self.playing, self.active, self.bets, self.pot, self.shares, betting_round)
+    def get_hand_state(self, betting_round, move: Move):
+        hand_state = HandState(self.names, self.actor, self.playing, self.active, self.bets, self.pot, self.shares, betting_round, move)
         return hand_state
 
-    def update_hand_states(self, start, betting_round):
-        hand_state = self.get_hand_state(betting_round)
+    def update_hand_states(self, start, betting_round, move: Move):
+        hand_state = self.get_hand_state(betting_round, move)
         for j, name, player in zip(np.arange(self.num_players), self.names, self.__players):
             player.update_hand_state(hand_state.add_player_info(name, (j+start)%self.num_players))
 
@@ -207,6 +207,7 @@ class Table:
         while not (self.bets[self.active] == max_bet).all():
             for i in range(self.num_players):
                 seat = (i+start) % self.num_players
+                self.actor = self.names[seat]
 
                 if not self.active[seat]:
                     continue
@@ -214,9 +215,6 @@ class Table:
                     break
                 if self.active.sum() <= 1:
                     break
-
-                # updating each player on current state of hand
-                self.update_hand_states(start, betting_round)
 
                 # proceeding with betting
                 move = self.get_move(seat)
@@ -276,6 +274,11 @@ class Table:
                         self.bets[seat] += move.amount
                         # round_shares += self.bets[i]
                         last_raiser = seat
+
+                # updating each player on current state of hand
+                self.update_hand_states(start, betting_round, move)
+
+            # end of path around table 
             betting_round += 1
             max_bet = self.bets.max()
             if self.active.sum() <= 1:
