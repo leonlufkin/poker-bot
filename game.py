@@ -1,8 +1,8 @@
 import numpy as np
 from os import listdir
 import sys
-from utils import rotate_list, smart_open, Hand, HandState, parse_argv
-from player import Caller, SmallRaiser
+from utils import rotate_list, smart_open, Move, Hand, HandState, parse_argv, timeout
+from player import Caller, SimpleRaiser
 
 class Dealer:
     def __init__(self, num_players):
@@ -168,13 +168,32 @@ class Table:
             self.active[1] = False
             print("{} is big blind and is forced all in!".format(self.names[1]))
 
+    @timeout(5)
+    def __get_move(self, seat):
+        return self.__players[seat].make_move()
+
+    def get_move(self, seat):
+        try:
+            return self.__get_move(seat)
+        except TimeoutError:
+            if self.bets[seat] == self.bets.max():
+                return Move("check")
+            else:
+                return Move("fold")
+
     def update_stack(self, player, amount):
         self.chip_stacks[player] += amount
         self.__players[player].update_stack(amount)
 
     def get_hand_state(self, betting_round):
-        hand_state = HandState(self.active, self.bets, self.pot, self.shares, betting_round)
+        hand_state = HandState(self.names, self.playing, self.active, self.bets, self.pot, self.shares, betting_round)
         return hand_state
+
+    def update_hand_states(self, start, betting_round):
+        hand_state = self.get_hand_state(betting_round)
+        for j, name, player in zip(np.arange(self.num_players), self.names, self.__players):
+            player.update_hand_state(hand_state.add_player_info(name, (j+start)%self.num_players))
+
 
     def round_of_betting(self, start=0, verbose=False):
         if self.active.sum() < 2:
@@ -197,12 +216,10 @@ class Table:
                     break
 
                 # updating each player on current state of hand
-                hand_state = self.get_hand_state(betting_round)
-                for j in range(self.num_players):
-                    self.__players[j].update_hand_state(hand_state.add_player_seat((j+start) % self.num_players))
+                self.update_hand_states(start, betting_round)
 
                 # proceeding with betting
-                move = self.__players[seat].make_move(seat, self.playing, self.bets, self.pot, self.shares, betting_round)
+                move = self.get_move(seat)
                 max_bet = self.bets.max()
 
                 if verbose:
@@ -324,6 +341,15 @@ class Table:
                 print("chip stacks after: ", end='')
                 print(self.chip_stacks)
 
+    def round_end(self, hole_cards, hand_ranks):
+        player_hands = {name: hand if playing else None for name, playing, hand in zip(self.names, self.playing, hole_cards)}
+        player_hand_ranks = {name: hand_rank if playing else 0 for name, playing, hand_rank in zip(self.names, self.playing, hand_ranks)}
+        for player, name in zip(self.__players, self.names):
+            player_hands_copy, player_hand_ranks_copy = player_hands.copy(), player_hand_ranks.copy()
+            player_hands_copy["me"] = player_hands_copy.pop(name)
+            player_hand_ranks_copy["me"] = player_hand_ranks_copy.pop(name)
+            player.round_end(player_hands_copy, player_hand_ranks_copy)
+
     def show_hands(self, hole_cards, community_cards):
         print("\nPlayers' hands:", end='')
         for name, cards in zip(self.names, hole_cards):
@@ -398,6 +424,9 @@ class Table:
         if verbose:
             self.show_stacks_according_to_players()
         
+        # giving end-of-round information to players
+        self.round_end(hole_cards, hand_ranks)
+
         # setup for next game
         self.move_blinds()
 
@@ -438,9 +467,9 @@ if __name__  == '__main__':
     table = Table()
     table.register_player("Caller 1", Caller(args.buy_in))
     table.register_player("Caller 2", Caller(args.buy_in))
-    table.register_player("Small Raiser 1", SmallRaiser(args.buy_in))
-    table.register_player("Small Raiser 2", SmallRaiser(args.buy_in))
-    table.register_player("Small Raiser 3", SmallRaiser(args.buy_in))
+    table.register_player("Small Raiser 1", SimpleRaiser(args.buy_in))
+    table.register_player("Small Raiser 2", SimpleRaiser(args.buy_in))
+    table.register_player("Small Raiser 3", SimpleRaiser(args.buy_in))
     table.register_player("Caller 3", Caller(args.buy_in))
 
     # playing hands

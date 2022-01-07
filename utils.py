@@ -102,18 +102,35 @@ class Hand:
         # high card
         return 0, None, faces_sorted
 
+def abstract_hand_key(hand_key: str):
+    hand = hand_key.split('-')
+    suits = [card[1] for card in hand]
+    suit_key = {}
+    abstract_suits = ['A', 'B', 'C', 'D']
+    for suit in suits:
+        if suit not in suit_key.keys():
+            suit_key.update({suit: abstract_suits.pop(0)})
+    for suit in suits:
+        hand_key = hand_key.replace(suit, suit_key[suit])
+    return hand_key
+
+from copy import deepcopy
 class HandState:
-    def __init__(self, active, bets, pot, shares, betting_round):
-        self.active = active
-        self.bets = bets
+    def __init__(self, names, playing, active, bets, pot, shares, betting_round):
+        self.playing = {name: is_playing for name, is_playing in zip(names, playing)}
+        self.active = {name: is_active for name, is_active in zip(names, active)}
+        self.bets = {name: bet for name, bet in zip(names, bets)}
         self.pot = pot
-        self.shares = shares
+        self.shares = {name: share for name, share in zip(names, shares)}
         self.betting_round = betting_round
         self.seat = None
 
-    def add_player_seat(self, seat):
-        self.seat = seat
-        return self
+    def add_player_info(self, name, seat) -> None:
+        c = deepcopy(self)
+        for dic in [c.playing, c.active, c.bets, c.shares]:
+            dic["me"] = dic.pop(name)
+        c.seat = seat
+        return c
 
 import argparse
 def parse_argv():
@@ -162,3 +179,28 @@ def smart_open(filename=None):
     finally:
         if fh is not sys.stdout:
             fh.close()
+
+# timeout code is from https://stackoverflow.com/questions/2281850/timeout-function-if-it-takes-too-long-to-finish
+import errno
+import os
+import signal
+import functools
+
+def timeout(seconds=10, error_message=os.strerror(errno.ETIME)):
+    def decorator(func):
+        def _handle_timeout(signum, frame):
+            raise TimeoutError(error_message)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            signal.signal(signal.SIGALRM, _handle_timeout)
+            signal.alarm(seconds)
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                signal.alarm(0)
+            return result
+
+        return wrapper
+
+    return decorator
