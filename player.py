@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractmethod
-from utils import HandState, Move, Hand
+from utils import HandState, Move, Hand, abstract_hand_key
 
 class Player(ABC):
     def __init__(self, number_chips):
@@ -197,22 +197,140 @@ class HandTracker(Caller):
                     self.add_flop_hand(player_hands[winner])
                     self.flop_hands[self.flop_hand_key] += np.array([0.5,0])
 
-from CFR import Node, CFR_Tree
+from CFR import Action, Chance, Terminal, CFR_Tree
+from utils import load_zipped_pickle
+preflop_hand_to_bucket = load_zipped_pickle("results/hand strength/preflop_hand_to_bucket.pkl")
+flop_hand_to_bucket = load_zipped_pickle("results/hand strength/flop_hand_to_bucket.pkl")
 
 class CFR(Player):
-    def __init__(self, chip_stack, CFR_tree: CFR_Tree) -> None:
+    def __init__(self, chip_stack, CFR_tree: CFR_Tree, my_name, hand_strength_path="results/hand strength") -> None:
         super().__init__(chip_stack)
         self.CFR_tree = CFR_tree
-        
+        self.my_name = my_name
+        self.preflop_hand_to_bucket = load_zipped_pickle(f"{hand_strength_path}/preflop_hand_to_bucket.pkl")
+        self.flop_hand_to_bucket = load_zipped_pickle(f"{hand_strength_path}/flop_hand_to_bucket.pkl")
+
+    def get_abstract_hand_key(self, hand):
+        return abstract_hand_key('-'.join(sorted(hand)))
+
     def get_hole_cards(self, hole_cards):
         super().get_hole_cards(hole_cards)
-        self.node = self.CFR_tree.head.choose_child(hole_cards)
+        self.move_node_preflop()
+
+    def get_preflop_bucket(self):
+        abstract_key = self.get_abstract_hand_key(self.hole_cards)
+        return self.preflop_hand_to_bucket[abstract_key]
+
+    def move_node_preflop(self):
+        """
+        move down the game tree based on chance's preflop action (which hole cards are dealt)
+        hole cards are bucketed based on hand strength
+        """
+        preflop_bucket = self.get_preflop_bucket()
+        self.node = self.CFR_tree.head.get_child(preflop_bucket)
+
+    def get_community_cards(self, community_cards):
+        super().get_community_cards(community_cards)
+        if len(community_cards) == 3:
+            self.move_node_flop()
+        elif len(community_cards) == 4:
+            self.move_node_turn()
+        else:
+            self.move_node_river()
+
+    def get_flop_bucket(self):
+        abstract_key = self.get_abstract_hand_key(self.hole_cards + self.community_cards)
+        return self.flop_hand_to_bucket[abstract_key]
+
+    def move_node_flop(self):
+        """
+        move down the game tree based on chance's flop action (which cards are dealt on the flop)
+        flop card sequences are bucketed based on hand strength
+        """
+        flop_bucket = self.get_flop_bucket()
+        self.node = self.node.get_child(flop_bucket)
+
+    def move_node_turn(self):
+        """
+        move down the game tree based on chance's turn action (which turn card is dealt)
+        turn card sequences are bucketed based on their abstract hand key
+        """
+        abstract_key = self.get_abstract_hand_key(self.hole_cards + self.community_cards)
+        self.node = self.node.get_child(abstract_key)
+
+    def move_node_river(self):
+        """
+        move down the game tree based on chance's river action (which river card is dealt)
+        river card sequences are bucketed based on their abstract hand key
+        """
+        self.move_node_turn()
+
+    def move_node_player(self):
+        """
+        move down the game tree based on an opponent's action
+        I think I could (should?) also use this for the player
+        """
+        move_key = f"{self.hand_state.actor}-{self.hand_state.move.move}"
+        if self.hand_state.move.move == "raise":
+            move_key += f"-{self.hand_state.move.amount}"
+        self.node = self.node.get_child(move_key)
 
     def update_hand_state(self, hand_state: HandState) -> None:
         super().update_hand_state(hand_state)
-        self.node.choose_child(hand_state.move) 
+        self.move_node_player()
+
+    def get_node_strategy(self, node: Action):
+        """
+        given regrets for actions, returns strategy according to regret matching
+        """
+        actions = list(node.children.keys())
+        regrets = np.array([child.regret for child in node.children.values()])
+        pos_regrets = np.maximum(regrets, 0)
+        if pos_regrets.sum() > 0:
+            strategy_probs = pos_regrets/pos_regrets.sum()
+        else:
+            strategy_probs = np.ones(len(actions))/len(actions)
+        strategy = {action: prob for action, prob in zip(node.children.keys(), strategy_probs)}
+        return strategy
+
+    def traverse(self, node, traverser, t):
+        """
+        CFR traversal with external sampling
+        logic comes straight from Brown, et al. (2019)
+        """
+        if isinstance(node, Terminal):
+            return node.get_player_utility(traverser)
+        if isinstance(node, Chance):
+            child = node.sample_child()
+            return self.traverse(child, traverser, t)
+        # node must be an action node
+        # old strategy
+        strategy = node.child_probs
+        if node.player == traverser:
+            expected_utilities = {}
+            for action in strategy.keys():
+                expected_utilities.update({action: self.traverse(node.get_child(action), traverser, t)})
+            avg_utility = sum([strategy[action] * expected_utilities[action] for action in strategy.keys()])
+            for key, action in node.children:
+                action_advantage = expected_utilities[key] - avg_utility
+                action.regret = (t * action.regret + strategy[action] * action_advantage) / (t+1) # assuming probability that other player plays to reach action is given by traverser's old strategy for that node (works for 2-player, not sure about 3+)
+            # updating strategy
+            node.child_probs = self.get_node_strategy(node)
+        else:
+            child = node.sample_child()
+            return self.traverse(child, traverser, t)
 
     def make_move(self):
-        # pre-flop
-        if len(self.community_cards) == 0:
-            self.game_tree[""]
+        # I need to fix the below line so it only includes valid actions
+        self.traverse(self.node, self.hand_state.seat, self.hands)
+        actions = np.array(list(self.node.child_probs.keys()))
+        strategy = np.array(list(self.node.child_probs.values()))
+        action = np.random.choice(actions, 1, strategy)
+        return action
+
+    def update_strategy(self):
+        pass
+
+    def round_end(self, player_hands, player_hand_ranks):
+        super().round_end(player_hands, player_hand_ranks)
+        self.update_strategy()

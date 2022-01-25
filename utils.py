@@ -1,23 +1,20 @@
 import numpy as np
 from collections import Counter
 
+import pickle
+import gzip
+
+def save_zipped_pickle(obj, filename, protocol=-1):
+    with gzip.open(filename, 'wb') as f:
+        pickle.dump(obj, f, protocol)
+        
+def load_zipped_pickle(filename):
+    with gzip.open(filename, 'rb') as f:
+        loaded_object = pickle.load(f)
+        return loaded_object
 
 def rotate_list(l, n):
     return l[-n:] + l[:-n]
-
-class Move:
-    def __init__(self, move, amount=0, actor=None):
-        self.validate_move(move, amount)
-        self.move = move
-        self.amount = amount
-        self.actor = actor
-    
-    def validate_move(self, move, amount):
-        if move not in ["fold", "call", "check", "raise"]:
-            raise ValueError("invalid move type {}, must be one of 'fold', 'call', 'check', or 'raise'".format(move))
-        if move == "raise":
-            if amount <= 0:
-                raise ValueError("cannot raise {}, must raise a strictly positive amount".format(amount))
 
 class Hand:
     def __init__(self, cards):
@@ -116,8 +113,9 @@ def abstract_hand_key(hand_key: str):
     return hand_key
 
 from copy import deepcopy
-class HandState:
-    def __init__(self, names, actor, playing, active, bets, pot, shares, betting_round, move: Move):
+class BettingState:
+    def __init__(self, names, actor, playing, active, bets, pot, shares, betting_round, move: Move, last_raiser):
+        # self.names = names
         self.playing = {name: is_playing for name, is_playing in zip(names, playing)}
         self.active = {name: is_active for name, is_active in zip(names, active)}
         self.bets = {name: bet for name, bet in zip(names, bets)}
@@ -128,6 +126,7 @@ class HandState:
         self.actor = actor
         self.move = move
         self.move.actor = actor
+        self.last_raiser = last_raiser
 
     def add_player_info(self, name, seat) -> None:
         c = deepcopy(self)

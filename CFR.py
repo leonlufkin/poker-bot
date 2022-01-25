@@ -1,99 +1,123 @@
 import numpy as np
-from utils import abstract_hand_key, Move
+from utils import abstract_hand_key, Move, BettingState
 from abc import ABC, abstractmethod
-
-class OldAction:
-    def __init__(self, action):
-        self.action = action
-        self.children = {}
-        self.regret = 0
-        self.iterations = 0
-
-    def update_regret(self, regret):
-        self.regret = (self.iterations * self.regret + regret) / (self.iterations + 1)
-        self.iterations += 1
-
-    def add_child(self, action):
-        self.children.update({action: Action(action)})
+from copy import deepcopy
 
 class Node(ABC):
-    """
-    a node in the game tree
-    """
-    def __init__(self, pot: float, children: dict, child_probs: list) -> None:
-        self.pot = pot
-        self.children_dict = children
-        self.child_probs = child_probs
-        self.utility = 0
-        self.iterations = 0
+    def __init__(self, node_prob, betting_state: BettingState, cards_seen = []):
+        self.children = {}
+        self.child_probs = {}
+        self.node_prob = node_prob
+        self.expected_utility = 0
+        self.betting_state = betting_state
+        self.cards_seen = cards_seen
 
-    def update_utility(self) -> None:
-        probs = np.array(self.probs)
-        utilities = np.array([child.utility for child in self.children.values()])
-        self.utility = (probs * utilities).sum()
+    def add_child(self, key, node, prob):
+        """
+        adds a child node to the dictionary of children
+        """
+        self.children.update({key: node})
+        self.child_probs.update({key: prob})
 
-    def choose_child(self, child_key):
-        return self.children[child_key]
+    @abstractmethod
+    def spawn_child(self, key):
+        """
+        spawn a child node (of class Node) given its key
+        """
+        pass
 
-    def select_child(self):
-        child_key = np.random.choice(self.children.keys(), 1, self.probs)
-        return self.children[child_key]
+    def get_child(self, key):
+        """
+        obtain a child node from set of child nodes given its key
+        """
+        if self.children[key] is None:
+            return self.spawn_child(key)
+        else:
+            return self.children[key]
 
+    def sample_child(self):
+        """
+        select a child node according to their selection probabilities (child_probs)
+        """
+        child_key = np.random.choice(np.array(list(self.children.keys())), 1, np.array(list(self.child_probs.values())))
+        return self.get_child(child_key)
+ 
 
 class Chance(Node):
-    """
-    a chance node - used when cards get dealt
-    """
-    def __init__(self, pot: float, buckets: list, plays: list):
-        self.child_iterations = plays
-        probs = list(np.array(plays) / self.iterations)
-        super().__init__(pot, buckets, probs)
-
-    def choose_child(self, hand: list, hand_to_bucket: dict):
-        child_key = abstract_hand_key('-'.join(sorted(hand)))
-        return super().choose_child(hand_to_bucket[child_key])
-
-
-class Action(Node):
-    """
-    an action node - used when players make actions
-    """
-    def __init__(self, children: dict, probs: list) -> None:
-        super().__init__(children, probs)
-        self.regret = 0
-
-    def choose_child(self, child_key):
-        if isinstance(child_key, Move):
-            move.actor
-        else:
-            return super().choose_child(child_key)
-
-    def update_regret(self, regret):
-        self.regret = (self.iterations * self.regret + regret) / (self.iterations + 1)
-        self.iterations += 1
-
-    def update_probs(self):
-        regrets = np.array([child.regret for child in self.children])
-        total_regret = np.maximum(regrets, 0).sum()
-        if total_regret > 0:
-            self.probs = np.maximum(regrets, 0) / total_regret
-        else:
-            self.probs = np.ones(regrets.shape[0]) / regrets.shape[0]
-
+    def __init__(self, node_prob, betting_state: BettingState, cards_seen=[]):
+        super().__init__(node_prob, betting_state, cards_seen)
 
 class Terminal(Node):
-    def __init__(self, pot, outcome) -> None:
-        self.pot = pot
-        self.children = None
-        self.probs = 1
-        self.utility = 
+    def __init__(self, node_prob, betting_state):
+        super().__init__(node_prob, betting_state)
 
+    def spawn_child(self, key):
+        pass
     
+    def get_player_utility(self, player):
+        if self.playing[player]:
+            return sum([share for p, share in self.shares.items() if p != player])
+        else:
+            return -self.shares[player]
+
+class Action(Node):
+    def __init__(self, node_prob, betting_state, cards_seen, raise_buckets: np.ndarray, player):
+        super().__init__(node_prob, betting_state, cards_seen)
+        self.regret = 0
+        self.player = player
+        self.num_players = len(betting_state.playing)
+        self.children_explored = 0 # counts child and each of its children
+        self.raise_buckets = raise_buckets
+        num_children = 3 + self.raise_buckets.shape[0]
+        for action in ["fold", "call", "check"] + self.raise_buckets.tolist():
+            self.children.update({action: None})
+            self.child_probs.update({action: 1/num_children})
+
+    def abstract_raise(self, amount):
+        closest_bucket_ind = np.argmin(np.absolute(self.raise_buckets - amount))
+        return int(self.raise_buckets[closest_bucket_ind])
+
+    def spawn_child(self, key):
+        betting_state = deepcopy(self.betting_state)
+        if key == "fold":
+            betting_state.playing[self.player] = False
+            # one player left
+            if sum(list(betting_state.playing.values())) == 1:
+                child = Terminal(1, betting_state)
+            else:
+                # player was last to act
+                if betting_state.last_raiser == (betting_state.actor+1)%self.num_players:
+                    # was river
+                    if len(self.cards_seen) == 7:
+                        
+                    # was preflop, flop, or turn
+                    else:
+                        child = Chance(cards, card_probs):
+
+
+        elif key == "call":
+            
+        else:
+            pass
+
+        self.children[key] = child
+        return child
+
+
+
+    def get_child(self, key):
+        if "raise" in key:
+            amount = float(key.split('-')[-1])
+            key = self.abstract_raise(amount)
+        super().get_child(key)
+
+
 class CFR_Tree:
-    """
-    the poker game tree, built up of chance, action, and terminal nodes
-    """
-    def __init__(self, preflop_buckets: dict, flop_buckets: dict, bet_buckets: dict):
-        # head node, where the hole cards are dealt, is always a chance node
-        self.head = self.node = Chance(0, preflop_buckets, preflop_probs)
-    
+    def __init__(self, num_preflop_buckets, names: np.ndarray, chip_stacks: np.ndarray, raise_buckets) -> None:
+        self.names = names
+        self.num_players = chip_stacks.shape[0]
+        self.raise_buckets = raise_buckets
+
+        self.head = Chance(1, 0, chip_stacks)
+        self.head.children.update({i: Action(1/num_preflop_buckets, 0, chip_stacks, raise_buckets, names[0]) for i in range(num_preflop_buckets)})
+

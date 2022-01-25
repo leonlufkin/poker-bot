@@ -1,8 +1,9 @@
 import numpy as np
 from os import listdir
 import sys
-from utils import rotate_list, smart_open, Move, Hand, HandState, parse_argv, timeout
+from utils import rotate_list, Hand, parse_argv, timeout#, BettingState
 from player import Caller, SimpleRaiser
+from move import Move, BettingState, BettingRound
 
 class Dealer:
     def __init__(self, num_players):
@@ -185,22 +186,71 @@ class Table:
         self.chip_stacks[player] += amount
         self.__players[player].update_stack(amount)
 
-    def get_hand_state(self, betting_round, move: Move):
-        hand_state = HandState(self.names, self.actor, self.playing, self.active, self.bets, self.pot, self.shares, betting_round, move)
-        return hand_state
+    def get_betting_state(self, betting_round, move: Move):
+        betting_state = BettingState(self.names, self.actor, self.playing, self.active, self.bets, self.pot, self.shares, betting_round, move, self.last_raiser)
+        return betting_state
 
-    def update_hand_states(self, start, betting_round, move: Move):
-        hand_state = self.get_hand_state(betting_round, move)
+    def update_betting_states(self, start, betting_round, move: Move):
+        betting_state = self.get_betting_state(betting_round, move)
         for j, name, player in zip(np.arange(self.num_players), self.names, self.__players):
-            player.update_hand_state(hand_state.add_player_info(name, (j+start)%self.num_players))
-
+            player.update_betting_state(betting_state.add_player_info(name, (j+start)%self.num_players))
 
     def round_of_betting(self, start=0, verbose=False):
         if self.active.sum() < 2:
             pass
 
+        betting_round = BettingRound(self.names, self.playing, self.active, self.chip_stacks, self.shares, 0)
         max_bet = -1
-        last_raiser = (start-1) % self.num_players
+        round = 0
+
+        while not (self.bets[self.active] == max_bet).all():
+            for i in range(self.num_players):
+                actor = self.names[(i+start) % self.num_players]
+
+                if not self.active[seat]:
+                    continue
+                if seat == self.last_raiser and betting_round > 0:
+                    break
+                if self.active.sum() <= 1:
+                    break
+
+                # proceeding with betting
+                move = self.get_move(seat)
+                max_bet = self.bets.max()
+
+                if verbose:
+                    print("\nseat: {:d}, pot: {:.2f}, highest bet: {:.2f}, last raiser: {:d}, betting round: {:d}, num active: {:d}".format(seat, self.pot + self.bets.sum(), max_bet, self.last_raiser, betting_round, self.active.sum()))
+                    with np.printoptions(precision=3, suppress=True):
+                        print("bets: ", end='')
+                        print(self.bets)
+                        print("shares: ", end='')
+                        print(self.shares + self.bets)
+                        print("chip stacks: ", end='')
+                        print(self.chip_stacks)
+                    self.show_stacks_according_to_players()
+
+
+                
+
+                # updating each player on current state of betting round
+                self.update_betting_states(start, betting_round, move)
+
+            # end of path around table 
+            betting_round += 1
+            max_bet = self.bets.max()
+            if self.active.sum() <= 1:
+                    break
+        # self.shares = (self.shares + round_shares) * self.active
+        self.shares += self.bets
+        self.pot += self.bets.sum()
+        self.reset_bets()
+
+    def round_of_betting_OLD(self, start=0, verbose=False):
+        if self.active.sum() < 2:
+            pass
+
+        max_bet = -1
+        self.last_raiser = (start-1) % self.num_players
         betting_round = 0
         round_shares = np.zeros(self.num_players)
 
@@ -211,7 +261,7 @@ class Table:
 
                 if not self.active[seat]:
                     continue
-                if seat == last_raiser and betting_round > 0:
+                if seat == self.last_raiser and betting_round > 0:
                     break
                 if self.active.sum() <= 1:
                     break
@@ -221,7 +271,7 @@ class Table:
                 max_bet = self.bets.max()
 
                 if verbose:
-                    print("\nseat: {:d}, pot: {:.2f}, highest bet: {:.2f}, last raiser: {:d}, betting round: {:d}, num active: {:d}".format(seat, self.pot + self.bets.sum(), max_bet, last_raiser, betting_round, self.active.sum()))
+                    print("\nseat: {:d}, pot: {:.2f}, highest bet: {:.2f}, last raiser: {:d}, betting round: {:d}, num active: {:d}".format(seat, self.pot + self.bets.sum(), max_bet, self.last_raiser, betting_round, self.active.sum()))
                     with np.printoptions(precision=3, suppress=True):
                         print("bets: ", end='')
                         print(self.bets)
@@ -266,23 +316,23 @@ class Table:
                         # round_shares[i] = self.bets[i] = self.chip_stacks[i] + self.bets[i]
                         self.update_stack(seat, -self.chip_stacks[seat])
                         self.active[seat] = False
-                        last_raiser = seat
+                        self.last_raiser = seat
                     else:
                         if verbose:
                             print("{} (seat {}) raises by {}!".format(self.names[seat], seat, move.amount))
                         self.update_stack(seat, -move.amount)
                         self.bets[seat] += move.amount
                         # round_shares += self.bets[i]
-                        last_raiser = seat
+                        self.last_raiser = seat
 
-                # updating each player on current state of hand
-                self.update_hand_states(start, betting_round, move)
+                # updating each player on current state of betting round
+                self.update_betting_states(start, betting_round, move)
 
             # end of path around table 
             betting_round += 1
             max_bet = self.bets.max()
             if self.active.sum() <= 1:
-                    break
+                break
         # self.shares = (self.shares + round_shares) * self.active
         self.shares += self.bets
         self.pot += self.bets.sum()
